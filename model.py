@@ -2,8 +2,10 @@ import csv
 import cv2
 from keras.models import Sequential
 from keras.layers import (
+    BatchNormalization,
     Cropping2D,
     Dense,
+    Dropout,
     Convolution2D,
     Flatten,
     Lambda,
@@ -11,10 +13,8 @@ from keras.layers import (
 from keras.callbacks import ModelCheckpoint
 import numpy as np
 import random
-from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
-import time
-
+from sklearn.model_selection import train_test_split
 
 BATCH_SIZE = 32
 
@@ -116,12 +116,11 @@ def frames_to_data(frames, augment=True):
     return input_data, labels
 
 
-def generator_training_data(batch_size=BATCH_SIZE):
+def generator_training_data(frames, batch_size=BATCH_SIZE):
     '''
     Returns the Frames as training data split between test and validation
     '''
     print('Getting training data')
-    frames = get_frames()
 
     index = 0
     while True:
@@ -137,47 +136,67 @@ def train():
     '''
     Trains and creates a neural network to mimic my (not-so-hot) driving
     '''
-    validation_input, validation_labels = frames_to_data(get_frames()[:32])
+    # split data into training, validation, and testing
+    training_frames, test_frames = train_test_split(get_frames(),
+                                                    test_size=0.2)
+    validation_frames, test_frames = train_test_split(test_frames,
+                                                      test_size=0.5)
+
+    print('Number of training frames: #{}'.format(len(training_frames)))
+    print('Number of validation frames: #{}'.format(len(validation_frames)))
+    print('Number of test frames: #{}'.format(len(test_frames)))
+
+    training_generator = generator_training_data(training_frames)
+    validation_generator = generator_training_data(validation_frames)
+    test_generator = generator_training_data(test_frames)
 
     # create model
     model = Sequential()
     model.add(Lambda(lambda x: x / 255.0 - 0.5, input_shape=(160, 320, 3)))
     model.add(Cropping2D(cropping=((70, 25), (0, 0))))
-    model.add(Convolution2D(10, (5, 5), activation='relu'))
+    model.add(Convolution2D(10, (7, 7), activation='relu'))
     model.add(MaxPooling2D())
-    model.add(Convolution2D(20, (5, 5), activation='relu'))
-    model.add(MaxPooling2D())
-    model.add(Convolution2D(48, (5, 5), activation='relu'))
-    model.add(MaxPooling2D())
-    # model.add(Convolution2D(64, (5, 5), activation='relu'))
+    model.add(BatchNormalization())
+    model.add(Convolution2D(20, (7, 7), activation='relu'))
+    model.add(BatchNormalization())
     # model.add(MaxPooling2D())
-    # model.add(Convolution2D(64, (5, 5), activation='relu'))
-    # model.add(MaxPooling2D())
+    model.add(Convolution2D(48, (7, 7), activation='relu'))
+    model.add(Convolution2D(60, (7, 7), activation='relu'))
+    model.add(BatchNormalization())
     model.add(Flatten())
+    model.add(Dropout(0.5))
     model.add(Dense(120))
+    model.add(BatchNormalization())
+    # model.add(Dropout(0.2))
     model.add(Dense(100))
+    model.add(BatchNormalization())
+    # model.add(Dropout(0.2))
     model.add(Dense(1))
+
     # Compile model
     model.compile(loss='mse', optimizer='adam')
-    # Fit the model
-
     model.summary()
 
     callbacks = [
         ModelCheckpoint('models/mimic_{epoch}.h5', period=1)
     ]
-    history = model.fit_generator(
-        generator_training_data(),
-        epochs=10,
-        steps_per_epoch=32,
+
+    validation_input, validation_labels = frames_to_data(validation_frames)
+    # Fit the model
+    model.fit_generator(
+        training_generator,
+        epochs=20,
+        steps_per_epoch=64,
         callbacks=callbacks,
-        validation_data=(validation_input, validation_labels),
+        validation_data=validation_generator,
+        validation_steps=3,
         verbose=1)
+
     # evaluate the model
-    # scores = model.evaluate(valid_x, valid_y, verbose=1)
+    scores = model.evaluate_generator(test_generator, steps=5)
+    print('Score: {}'.format(scores))
+
     model.save('model.h5')
-    print('History: ', history)
-    # print('Scores: ', scores)
 
 
 if __name__ == '__main__':
